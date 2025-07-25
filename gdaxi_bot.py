@@ -5,7 +5,7 @@ import smtplib
 import os
 import logging
 from email.mime.text import MIMEText
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # -------------------
@@ -21,9 +21,13 @@ SMTP_PORT = 587
 
 PARIS_TZ = pytz.timezone('Europe/Paris')
 
-PORTFOLIO_USD = 1_000_000
+INITIAL_CAPITAL = 1_000_000
+PORTFOLIO_USD = INITIAL_CAPITAL
 PORTFOLIO_DAX = 0
 last_hour_report = None
+
+MARKET_OPEN = (9, 30)   # 09:30
+MARKET_CLOSE = (17, 30) # 17:30
 
 # -------------------
 # LOGGING CONFIG
@@ -66,28 +70,50 @@ def get_last_two_candles():
         return None, None
 
 # -------------------
+# ATTENTE JUSQU'À PROCHAINE OUVERTURE
+# -------------------
+def wait_until_open():
+    now = datetime.now(PARIS_TZ)
+    next_open = now.replace(hour=MARKET_OPEN[0], minute=MARKET_OPEN[1], second=0, microsecond=0)
+    if now > next_open:
+        next_open += timedelta(days=1)
+    sleep_seconds = (next_open - now).total_seconds()
+    logging.info(f"⏸ Marché fermé : reprise à {next_open.strftime('%Y-%m-%d %H:%M')}")
+    time.sleep(sleep_seconds)
+
+# -------------------
 # LOGIQUE TRADING
 # -------------------
 def trading_bot():
     global PORTFOLIO_USD, PORTFOLIO_DAX, last_hour_report
 
     now = datetime.now(PARIS_TZ)
+    market_open_time = now.replace(hour=MARKET_OPEN[0], minute=MARKET_OPEN[1])
+    market_close_time = now.replace(hour=MARKET_CLOSE[0], minute=MARKET_CLOSE[1])
 
-    # ✅ Bot actif uniquement entre 09:30 et 17:30
-    if now.hour < 9 or (now.hour == 9 and now.minute < 30) or (now.hour > 17 or (now.hour == 17 and now.minute > 30)):
-        logging.info("Bot en veille (hors horaires)")
-        time.sleep(60)
+    # Si avant ouverture → attendre
+    if now < market_open_time:
+        wait_until_open()
         return
 
-    # Vente automatique à 17:30
-    if now.hour == 17 and now.minute >= 30 and PORTFOLIO_DAX > 0:
-        last_candle, _ = get_last_two_candles()
-        if last_candle is not None:
-            close_price = last_candle["Close"]
-            PORTFOLIO_USD += PORTFOLIO_DAX * close_price
-            PORTFOLIO_DAX = 0
-            logging.info("Fin de journée : positions fermées")
-            send_email("Clôture GDAXI", f"Positions fermées.\nUSD: {PORTFOLIO_USD:.2f}\nDAX: {PORTFOLIO_DAX}")
+    # Si après fermeture → vente + bilan + pause
+    if now > market_close_time:
+        if PORTFOLIO_DAX > 0:
+            last_candle, _ = get_last_two_candles()
+            if last_candle is not None:
+                close_price = last_candle["Close"]
+                PORTFOLIO_USD += PORTFOLIO_DAX * close_price
+                PORTFOLIO_DAX = 0
+                gain = PORTFOLIO_USD - INITIAL_CAPITAL
+                message = (
+                    f"Clôture du marché :\n"
+                    f"USD final : {PORTFOLIO_USD:.2f}\n"
+                    f"Gain du jour : {gain:+.2f}\n"
+                    f"DAX : {PORTFOLIO_DAX}"
+                )
+                logging.info("📩 " + message.replace("\n", " | "))
+                send_email("Clôture GDAXI", message)
+        wait_until_open()
         return
 
     # Récupération des 2 bougies terminées
@@ -110,8 +136,12 @@ def trading_bot():
     # Rapport toutes les heures pile
     if last_hour_report != now.hour:
         last_hour_report = now.hour
-        report = f"Heure : {now.strftime('%H:%M')}\nUSD : {PORTFOLIO_USD:.2f}\nDAX : {PORTFOLIO_DAX}"
-        logging.info(report)
+        report = (
+            f"Heure : {now.strftime('%H:%M')}\n"
+            f"USD : {PORTFOLIO_USD:.2f}\n"
+            f"DAX : {PORTFOLIO_DAX}"
+        )
+        logging.info("⏱ Rapport : " + report.replace("\n", " | "))
         send_email("Rapport horaire GDAXI", report)
 
     time.sleep(60)
@@ -120,7 +150,7 @@ def trading_bot():
 # BOUCLE PRINCIPALE
 # -------------------
 if __name__ == "__main__":
-    logging.info("Bot GDAXI démarré...")
+    logging.info("✅ Bot GDAXI démarré...")
     while True:
         try:
             trading_bot()
