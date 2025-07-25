@@ -1,0 +1,3 @@
+yfinance
+pytz
+python-dotenv
