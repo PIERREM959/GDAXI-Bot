@@ -73,11 +73,13 @@ def trading_bot():
 
     now = datetime.now(PARIS_TZ)
 
-    if now.hour < 9 or (now.hour >= 17 and now.minute > 30):
+    # ✅ Bot actif uniquement entre 09:30 et 17:30
+    if now.hour < 9 or (now.hour == 9 and now.minute < 30) or (now.hour > 17 or (now.hour == 17 and now.minute > 30)):
         logging.info("Bot en veille (hors horaires)")
         time.sleep(60)
         return
 
+    # Vente automatique à 17:30
     if now.hour == 17 and now.minute >= 30 and PORTFOLIO_DAX > 0:
         last_candle, _ = get_last_two_candles()
         if last_candle is not None:
@@ -88,20 +90,24 @@ def trading_bot():
             send_email("Clôture GDAXI", f"Positions fermées.\nUSD: {PORTFOLIO_USD:.2f}\nDAX: {PORTFOLIO_DAX}")
         return
 
+    # Récupération des 2 bougies terminées
     candle_m1, candle_m2 = get_last_two_candles()
     if candle_m1 is None or candle_m2 is None:
         logging.warning("Pas assez de données")
         time.sleep(60)
         return
 
+    # Calcul M1 et M2
     M1 = (candle_m1["Open"] + candle_m1["High"] + candle_m1["Low"] + candle_m1["Close"]) / 4
     M2 = (candle_m2["Open"] + candle_m2["High"] + candle_m2["Low"] + candle_m2["Close"]) / 4
 
+    # Achat si M1 > M2
     if M1 > M2:
         current_price = candle_m1["Close"]
         PORTFOLIO_USD -= current_price
         PORTFOLIO_DAX += 1
 
+    # Rapport toutes les heures pile
     if last_hour_report != now.hour:
         last_hour_report = now.hour
         report = f"Heure : {now.strftime('%H:%M')}\nUSD : {PORTFOLIO_USD:.2f}\nDAX : {PORTFOLIO_DAX}"
@@ -110,6 +116,9 @@ def trading_bot():
 
     time.sleep(60)
 
+# -------------------
+# BOUCLE PRINCIPALE
+# -------------------
 if __name__ == "__main__":
     logging.info("Bot GDAXI démarré...")
     while True:
